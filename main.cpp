@@ -1528,8 +1528,8 @@ i32 app_execute(const char *bytecode_filename, bool trace = false) {
     }
     auto vm = il::build_vm(il::VmConfig{
         .filename = std::string(bytecode_filename),
-        .stack_size = 16 * 4024,
-        .rstack_size = 4096,
+        .stack_size = 16 * 1024 * 1024,
+        .rstack_size = 1024 * 1024,
     }, bc);
     if (std::holds_alternative<std::vector<std::string>>(vm)) {
         for (auto &err : std::get<std::vector<std::string>>(vm)) {
