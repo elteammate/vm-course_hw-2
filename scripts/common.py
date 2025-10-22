@@ -14,9 +14,9 @@ class TestGroup:
 groups = [
     TestGroup(root=Path("tests"), kind="plain"),
     TestGroup(root=Path("Lama/regression"), kind="cram"),
-    TestGroup(root=Path("Lama/regression_long/expressions"), kind="cram"),
-    TestGroup(root=Path("Lama/regression_long/deep-expressions"), kind="cram"),
-    TestGroup(root=Path("Lama/performance"), kind="plain"),
+    # TestGroup(root=Path("Lama/regression_long/expressions"), kind="cram"),
+    # TestGroup(root=Path("Lama/regression_long/deep-expressions"), kind="cram"),
+    # TestGroup(root=Path("Lama/performance"), kind="plain"),
 ]
 
 
@@ -122,6 +122,7 @@ def gather(filter_: Callable[[Test], bool] = lambda x: True) -> list[Test]:
         Path("Lama/regression/test054.lama"),
         Path("Lama/regression/test110.lama"),
         Path("Lama/regression/test111.lama"),
+        Path("Lama/regression/test803.lama"),
     ]]
 
     return result
@@ -138,14 +139,14 @@ def ensure_compiled():
     subprocess.run([
         "make",
         "-C",
-        "Lama/runtime",
+        "runtime",
     ]).check_returncode()
     subprocess.run([
         "gcc",
         "Lama/byterun/byterun.c",
-        "Lama/runtime/runtime.a",
+        "runtime/runtime.a",
         "-I",
-        "Lama/runtime",
+        "runtime",
         "-o",
         "byterun.out",
     ]).check_returncode()

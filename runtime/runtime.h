@@ -28,7 +28,16 @@ extern void *Barray(aint* args, aint bn);
 extern void *Bsexp(aint* args, aint bn);
 extern aint Btag(void *d, aint t, aint n);
 extern aint LtagHash(char *);
-extern void Bmatch_failure(void *v, char *fname, aint line, aint col);
+extern void Bmatch_failure(void *v, const char *fname, aint line, aint col);
 extern void *Lstring(aint* args);
+extern void *Bclosure(aint* args, aint bn);
+extern aint Bclosure_tag_patt(void *x);
+extern aint Bboxed_patt(void *x);
+extern aint Bunboxed_patt(void *x);
+extern aint Barray_tag_patt(void *x);
+extern aint Bstring_tag_patt(void *x);
+extern aint Bsexp_tag_patt(void *x);
+extern aint Bstring_patt(void *x, void *y);
+extern aint Barray_patt (void *d, aint n);
 
 #endif

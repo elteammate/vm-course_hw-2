@@ -694,6 +694,9 @@ extern void *Belem (void *p, aint i) {
   a = TO_DATA(p);
   i = UNBOX(i);
 
+  auint len = LEN(a->data_header);
+  if (i >= len || i < 0) failure("index out of bounds (index=%ld, length=%ld)", i, len);
+
   switch (TAG(a->data_header)) {
     case STRING_TAG: return (void *)BOX((char)a->contents[i]);
     case SEXP_TAG: return (void *)((aint *)((sexp *)a)->contents)[i];
@@ -951,6 +954,9 @@ extern void *Bsta (void *x, aint i, void *v) {
     ASSERT_BOXED(".sta:3", x);
     data *d = TO_DATA(x);
 
+    auint len = LEN(d->data_header);
+    if (UNBOX(i) >= len || UNBOX(i) < 0) failure("index out of bounds (index=%ld, length=%ld)", UNBOX(i), len);
+
     switch (TAG(d->data_header)) {
       case STRING_TAG: {
         ((char *)x)[UNBOX(i)] = (char)UNBOX(v);
@@ -958,6 +964,11 @@ extern void *Bsta (void *x, aint i, void *v) {
       }
       case SEXP_TAG: {
         ((aint *)((sexp *)d)->contents)[UNBOX(i)] = (aint)v;
+        break;
+      }
+      case CLOSURE_TAG: {
+        if (UNBOX(i) == 0) failure("can't write into closure pointer");
+        ((aint *)d->contents)[UNBOX(i) - 1] = (aint)v;
         break;
       }
       default: {
@@ -971,7 +982,7 @@ extern void *Bsta (void *x, aint i, void *v) {
   return v;
 }
 
-extern void Bmatch_failure (void *v, char *fname, aint line, aint col) {
+extern void Bmatch_failure (void *v, const char *fname, aint line, aint col) {
   createStringBuf();
   printValue(v);
   failure("match failure at %s:%ld:%ld, value '%s'\n",
@@ -1283,6 +1294,7 @@ extern int Lbinoperror2 (void) {
 
 /* Lwrite is an implementation of the "write" construct */
 extern aint Lwrite (aint n) {
+  ASSERT_UNBOXED("Lwrite, 0", n);
   printf("%" PRIdAI "\n", UNBOX(n));
   fflush(stdout);
 

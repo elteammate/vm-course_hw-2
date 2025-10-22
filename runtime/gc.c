@@ -1,6 +1,8 @@
 #define _GNU_SOURCE 1
 
+// #define DEBUG_VERSION
 // #define DEBUG_PRINT
+// #define FULL_INVARIANT_CHECKS
 
 #include "gc.h"
 
@@ -63,7 +65,7 @@ void *alloc (size_t size) {
   size            = BYTES_TO_WORDS(size);
   size_t padding  = size * sizeof(size_t) - obj_size;
 #if defined(DEBUG_VERSION) && defined(DEBUG_PRINT)
-  fprintf(stderr, "allocation of size %zu words (%zu bytes): ", size, bytes_sz);
+  fprintf(stderr, "allocation of size %zu words (%zu bytes): ", size, obj_size);
 #endif
   void *p = gc_alloc_on_existing_heap(size);
   if (!p) {
@@ -85,8 +87,8 @@ void *alloc (size_t size) {
 static void print_object_info (FILE *f, void *obj_content) {
   data  *d       = TO_DATA(obj_content);
   size_t obj_tag = TAG(d->data_header);
-  size_t obj_id  = d->id;
-  fprintf(f, "id %zu tag %zu | ", obj_id, obj_tag);
+  // size_t obj_id  = d->id;
+  fprintf(f, "id %zu tag %zu | ", 0, obj_tag);
 }
 
 static void print_unboxed (FILE *f, int unboxed) { fprintf(f, "unboxed %zu | ", unboxed); }
@@ -265,7 +267,7 @@ void mark_phase (void) {
   fprintf(stderr, "scan_global_area has started\n");
 #endif
 #ifdef LAMA_ENV
-  scan_global_area();
+  // scan_global_area();
 #endif
 #if defined(DEBUG_VERSION) && defined(DEBUG_PRINT)
   fprintf(stderr, "scan_global_area has finished\n");
@@ -466,8 +468,8 @@ void update_references (memory_chunk *old_heap) {
   scan_and_fix_region_roots(old_heap);
 
 #ifdef LAMA_ENV
-  assert((void *)&__stop_custom_data >= (void *)&__start_custom_data);
-  scan_and_fix_region(old_heap, (void *)&__start_custom_data, (void *)&__stop_custom_data);
+  // assert((void *)&__stop_custom_data >= (void *)&__start_custom_data);
+  // scan_and_fix_region(old_heap, (void *)&__start_custom_data, (void *)&__stop_custom_data);
 #endif
 #if defined(DEBUG_VERSION) && defined(DEBUG_PRINT)
   fprintf(stderr, "GC update_references finished\n");
@@ -775,7 +777,7 @@ lama_type get_type_header_ptr (void *ptr) {
               ptr,
               TAG(*header),
               heap.size,
-              cur_id,
+              0,
               (void *)__gc_stack_top,
               (void *)__gc_stack_bottom);
 #    endif

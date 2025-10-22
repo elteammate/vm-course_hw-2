@@ -1,4 +1,3 @@
-#include <bit>
 #include <algorithm>
 #include <chrono>
 #include <memory>
@@ -6,16 +5,13 @@
 #include <vector>
 #include <bitset>
 #include <cstring>
-#include <iostream>
-#include <queue>
-#include <map>
 #include <unordered_map>
 
 extern "C" {
 #include <runtime.h>
 #include <gc.h>
-void *__start_custom_data;
 void *__stop_custom_data;
+void *__start_custom_data;
 }
 
 
@@ -96,11 +92,11 @@ namespace el {
         CALLC = 0x55,
         CALL = 0x56,
         TAG = 0x57,
-        ARRAY = 0x58,
         FAIL = 0x59,
         LINE = 0x5a,
 
         PATT_STR = 0x60,
+        PATT_ARR = 0x58,
         PATT_STRING = 0x61,
         PATT_ARRAY = 0x62,
         PATT_SEXP = 0x63,
@@ -164,7 +160,7 @@ namespace el {
         case (u8)Op::CALLC:
         case (u8)Op::CALL:
         case (u8)Op::TAG:
-        case (u8)Op::ARRAY:
+        case (u8)Op::PATT_ARR:
         case (u8)Op::FAIL:
         case (u8)Op::LINE:
         case (u8)Op::PATT_STR:
@@ -244,7 +240,7 @@ namespace el {
             }
         }
 
-        auto close_file = [](FILE *f) { if (f && f != stdin) std::fclose(f); };
+        auto close_file = [](FILE *file) { if (file && file != stdin) std::fclose(file); };
         std::unique_ptr<FILE, decltype(close_file)> file_guard(f, close_file);
 
         if (std::fseek(f, 0, SEEK_END) != 0) {
@@ -268,11 +264,10 @@ namespace el {
         return {std::move(bytecode), bytecode_from_bytes(bytecode.data(), bytecode.size())};
     }
 
-    std::vector<std::string> validate_bytecode_stage0(Bytecode &bc) {
+    std::vector<std::string> validate_bytecode_stage0(const Bytecode &bc) {
         std::vector<std::string> errors;
 
-        auto code = (u8 *)bc.code;
-        if (code[bc.code_size - 1] != 0xff) {
+        if (auto code = (u8 *)bc.code; code[bc.code_size - 1] != 0xff) {
             errors.emplace_back("Code section must end with 0xff byte");
         }
 
@@ -318,7 +313,7 @@ namespace el {
             return result;
         }
 
-        char *get_string(i32 offset) const {
+        [[nodiscard]] char *get_string(i32 offset) const {
             if (offset < 0 || offset >= bc.strings_size) [[unlikely]] {
                 throw std::runtime_error(std::format("String offset 0x{:08x} is out of bounds", offset));
             }
@@ -412,8 +407,7 @@ namespace el {
                 std::fprintf(f, "CLOSURE\t0x%.8x", svm.arg());
                 i32 num_captures = svm.arg();
                 for (i32 i = 0; i < num_captures; i++) {
-                    u8 designator = svm.byte_arg();
-                    if (designator == 0) {
+                    if (u8 designator = svm.byte_arg(); designator == 0) {
                         std::fprintf(f, "G(%d)", svm.arg());
                     } else if (designator == 1) {
                         std::fprintf(f, "L(%d)", svm.arg());
@@ -437,7 +431,7 @@ namespace el {
                 i32 num = svm.arg();
                 std::fprintf(f, "TAG\t%s %d", s, num);
             }
-            kase Op::ARRAY: std::fprintf(f, "ARRAY\t%d", svm.arg());
+            kase Op::PATT_ARR: std::fprintf(f, "ARRAY\t%d", svm.arg());
             kase Op::FAIL: {
                 i32 line = svm.arg();
                 i32 column = svm.arg();
@@ -514,9 +508,8 @@ namespace il {
         CLOSURE, // u32
         CALLC, // u32
         CALL, // u32 u32
-        // TODO: uneeded?
         TAG, // char *, u32
-        ARRAY, // u32
+        PATT_ARR, // u32
         FAIL, // u32 u32
         LINE, // u32
 
@@ -535,6 +528,7 @@ namespace il {
         BUILTIN_ARRAY,
 
         NOP,
+        POP_CC,
     };
 
     u32 dump_instruction(u8 *code, u32 ip) {
@@ -553,10 +547,8 @@ namespace il {
             ip += sizeof(void *);
             return result;
         };
-        
-        auto op = (Op)code[ip++];
-        
-        switch (op) {
+
+        switch (auto op = (Op)code[ip++]) {
             case Op::BINOP_ADD: std::printf("BINOP_ADD");
             kase Op::BINOP_SUB: std::printf("BINOP_SUB");
             kase Op::BINOP_MUL: std::printf("BINOP_MUL");
@@ -618,8 +610,10 @@ namespace il {
                 u32 args = read_u32();
                 std::printf("CBEGIN locals=%u, args=%u", locals, args);
             }
-            kase Op::CLOSURE:
-                std::printf("CLOSURE 0x%08x", read_u32());
+            kase Op::CLOSURE: {
+                u32 num_args = read_u32();
+                std::printf("CLOSURE args=%u", num_args);
+            }
             kase Op::CALL: {
                 u32 offset = read_u32();
                 u32 num_args = read_u32();
@@ -648,10 +642,11 @@ namespace il {
                 auto tag = (char *)read_ptr();
                 std::printf("TAG \"%s\" %u", tag, read_u32());
             }
-            kase Op::ARRAY: std::printf("ARRAY %u", read_u32());
+            kase Op::PATT_ARR: std::printf("ARRAY %u", read_u32());
             kase Op::FAIL: std::printf("FAIL %u", read_u32());
             kase Op::LINE: std::printf("LINE %u", read_u32());
             kase Op::NOP: std::printf("NOP");
+            kase Op::POP_CC: std::printf("POP_CC");
             otherwise: std::printf("UNKNOWN_OP(%u)", static_cast<u8>(op));
         }
         
@@ -668,9 +663,11 @@ namespace il {
         u32 ip;
         u32 fp;
         u32 lp;
+        u32 bp;
     };
 
     struct VmConfig {
+        std::string filename;
         usize stack_size;
         usize rstack_size;
     };
@@ -687,6 +684,8 @@ namespace il {
         ARG_SLOT_OUT_OF_BOUNDS,
         POINTER_EXPECTED,
         TOO_MANY_ARGUMENTS,
+        STACK_INCONSISTENT,
+        NOT_IN_CLOSURE,
     };
 
     struct Vm {
@@ -696,14 +695,17 @@ namespace il {
         std::unique_ptr<u8 []> consts;
         std::unordered_map<std::string, u32> global_functions;
         std::vector<std::pair<u32, u32>> line_mapping;
+        std::string filename;
         u32 globals_size;
-        u32 ip;
-        u32 sp;
-        u32 rsp;
-        u32 fp;
-        u32 lp;
+        u32 ip; // instruction pointer
+        u32 sp; // stack pointer
+        u32 rsp; // return stack pointer
+        u32 fp; // frame pointer (arguments)
+        u32 lp; // local variables pointer (locals)
+        u32 bp; // base pointer (temporaries)
         u32 stack_top;
         u32 rstack_top;
+        void *cc; // current closure register
     };
 
     std::variant<Vm, std::vector<std::string>> build_vm(VmConfig cfg, el::Bytecode bc) {
@@ -834,6 +836,11 @@ namespace il {
                 auto offset = (u32)scanner.arg();
                 WRITE_VALUE(offset);
             }
+            kase el::Op::ST_CLOSURE: {
+                write_op(Op::ST_CLOSURE);
+                auto offset = (u32)scanner.arg();
+                WRITE_VALUE(offset);
+            }
             kase el::Op::LD_GLOBAL: {
                 write_op(Op::LD_GLOBAL);
                 auto offset = (u32)scanner.arg();
@@ -849,6 +856,11 @@ namespace il {
             }
             kase el::Op::LD_ARG: {
                 write_op(Op::LD_ARG);
+                auto offset = (u32)scanner.arg();
+                WRITE_VALUE(offset);
+            }
+            kase el::Op::LD_CLOSURE: {
+                write_op(Op::LD_CLOSURE);
                 auto offset = (u32)scanner.arg();
                 WRITE_VALUE(offset);
             }
@@ -917,20 +929,76 @@ namespace il {
                 WRITE_VALUE(column);
             }
             kase el::Op::CLOSURE: {
-                // TODO: finish this
-                auto offset = (u32)scanner.arg();
+                auto fn_offset = (u32)scanner.arg();
                 auto num_args = (u32)scanner.arg();
+                write_op(Op::CONST);
+                // instead of storing function pointer we store offset in bytecode
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+                offsets_to_fix.push_back(code.size());
+#else
+                offsets_to_fix.push_back(code.size() + (sizeof(aint) - sizeof(u32)));
+#endif
+                WRITE_VALUE((aint)fn_offset);
+                for (u32 i = 0; i < num_args; ++i) {
+                    auto designator = scanner.byte_arg();
+                    auto offset = (u32)scanner.arg();
+                    switch (designator) {
+                    case 0:
+                        write_op(Op::LD_GLOBAL);
+                        WRITE_VALUE(offset);
+                    kase 1:
+                        write_op(Op::LD_LOCAL);
+                        WRITE_VALUE(offset);
+                    kase 2:
+                        write_op(Op::LD_ARG);
+                        WRITE_VALUE(offset);
+                    kase 3:
+                        write_op(Op::LD_CLOSURE);
+                        WRITE_VALUE(offset);
+                    otherwise:
+                        errors.emplace_back(std::format("Unsupported designator {}", designator));
+                        for (int j = 0; j < sizeof(offset) + 1; ++j) {
+                            write_op(Op::NOP);
+                        }
+                    }
+                }
+
                 write_op(Op::CLOSURE);
-                WRITE_VALUE(offset);
                 WRITE_VALUE(num_args);
             }
+            kase el::Op::CALLC: {
+                auto num_args = (u32)scanner.arg();
+                write_op(Op::CALLC);
+                WRITE_VALUE(num_args);
+                write_op(Op::POP_CC);
+            }
+            kase el::Op::CBEGIN: {
+                write_op(Op::BEGIN);
+                auto args = (u32)scanner.arg();
+                auto locals = (u32)scanner.arg();
+                WRITE_VALUE(args);
+                WRITE_VALUE(locals);
+            }
+            kase el::Op::RET:
+                errors.emplace_back("RET is not supported because it is not generated");
+            kase el::Op::PATT_STR: write_op(Op::PATT_STR);
+            kase el::Op::PATT_ARR: {
+                write_op(Op::PATT_ARR);
+                WRITE_VALUE(scanner.arg());
+            }
+            kase el::Op::PATT_STRING: write_op(Op::PATT_STRING);
+            kase el::Op::PATT_ARRAY: write_op(Op::PATT_ARRAY);
+            kase el::Op::PATT_SEXP: write_op(Op::PATT_SEXP);
+            kase el::Op::PATT_REF: write_op(Op::PATT_REF);
+            kase el::Op::PATT_VAL: write_op(Op::PATT_VAL);
+            kase el::Op::PATT_FUN: write_op(Op::PATT_FUN);
             kase el::Op::STOP:
+                break;
             otherwise:
                 errors.emplace_back(std::format("Unsupported operation {:02x} at {:08x}", (u32)op, scanner.ip));
                 return std::move(errors);
             }
             if (op == el::Op::STOP) {
-                // TODO: write a failure due to executing out of code bounds
                 for (int i = 0; i < 32; ++i) {
                     write_op(Op::NOP);
                 }
@@ -1005,14 +1073,17 @@ namespace il {
             .consts = std::move(pinned_consts),
             .global_functions = std::move(global_functions),
             .line_mapping = std::move(line_mapping),
+            .filename = std::move(cfg.filename),
             .globals_size = (u32)bc.globals_size,
             .ip = 0,
             .sp = (u32)bc.globals_size,
             .rsp = 0,
             .fp = (u32)bc.globals_size,
             .lp = (u32)bc.globals_size,
+            .bp = (u32)bc.globals_size,
             .stack_top = (u32)full_stack_size,
             .rstack_top = (u32)cfg.rstack_size,
+            .cc = nullptr,
         };
     }
 
@@ -1033,28 +1104,29 @@ namespace il {
             }
             if (i == vm.fp) std::printf(" <fp");
             if (i == vm.lp) std::printf(" <lp");
+            if (i == vm.bp) std::printf(" <bp");
             std::printf("\n");
         }
     }
 
-    void gc_update(Vm &vm) {
-        __gc_stack_top = (usize)vm.stack.get();
-        __gc_stack_bottom = (usize)vm.stack.get() + vm.sp;
+    void gc_update(const Vm &vm) {
+        __gc_stack_top = (usize)vm.stack.get() - sizeof(void *);
+        __gc_stack_bottom = (usize)(vm.stack.get() + vm.sp);
     }
 
     ExecutionError vm_continue(Vm &vm, bool trace = false) {
 #define ESCAPE(varname) CONCAT(varname, _VAL)
 
 #define POP(varname) \
-if (vm.sp <= vm.fp) return ExecutionError::STACK_UNDERFLOW; \
+if (vm.sp <= vm.bp) return ExecutionError::STACK_UNDERFLOW; \
 auto varname = vm.stack[--vm.sp];
 
 #define PEEK(varname) \
-if (vm.sp <= vm.fp) return ExecutionError::STACK_UNDERFLOW; \
+if (vm.sp <= vm.bp) return ExecutionError::STACK_UNDERFLOW; \
 auto varname = vm.stack[vm.sp - 1];
 
 #define POP2(varname, varname2) \
-if (--vm.sp <= vm.fp) return ExecutionError::STACK_UNDERFLOW; \
+if (--vm.sp <= vm.bp) return ExecutionError::STACK_UNDERFLOW; \
 auto varname2 = vm.stack[vm.sp]; \
 auto varname = vm.stack[--vm.sp]
 
@@ -1075,9 +1147,11 @@ POP(ESCAPE(varname)); \
 if (UNBOXED(ESCAPE(varname).number)) return ExecutionError::POINTER_EXPECTED; \
 void *varname = ESCAPE(varname).ptr
 
-#define PUSH(expr) \
+#define PUSH(expr) { \
 if (vm.sp >= vm.stack_top) return ExecutionError::STACK_OVERFLOW; \
-vm.stack[vm.sp++] = (expr)
+auto __res = (expr); \
+vm.stack[vm.sp++] = __res; \
+}
 
 #define PUSH_PTR(expr) PUSH(Value { .ptr = (expr) })
 #define PUSH_NUM_ASSUME_BOXED(expr) PUSH(Value { .number = expr })
@@ -1139,12 +1213,12 @@ vm.ip += sizeof(varname)
                 PUSH_NUM((aint)(a >= b));
             }
             kase Op::BINOP_EQ: {
-                POP2_NUM(a, b);
-                PUSH_NUM((aint)(a == b));
+                POP2(a, b);
+                PUSH_NUM((aint)(a.number == b.number));
             }
             kase Op::BINOP_NE: {
-                POP2_NUM(a, b);
-                PUSH_NUM((aint)(a != b));
+                POP2(a, b);
+                PUSH_NUM((aint)(a.number != b.number));
             }
             kase Op::BINOP_AND: {
                 POP2_NUM(a, b);
@@ -1160,6 +1234,7 @@ vm.ip += sizeof(varname)
             }
             kase Op::STRING: {
                 FETCH_VALUE(aint, s);
+                gc_update(vm);
                 auto x = Bstring(&s);
                 PUSH_PTR(x);
             }
@@ -1192,14 +1267,19 @@ vm.ip += sizeof(varname)
                 for (u32 i = 0; i < locals; ++i) {
                     vm.stack[vm.sp++].number = BOX(0);
                 }
+                vm.bp = vm.sp;
             }
             kase Op::END: {
                 POP(ret);
+                if (vm.sp != vm.bp) {
+                    return ExecutionError::STACK_INCONSISTENT;
+                }
                 auto &entry = vm.rstack[--vm.rsp];
                 vm.sp = vm.fp;
                 vm.ip = entry.ip;
                 vm.fp = entry.fp;
                 vm.lp = entry.lp;
+                vm.bp = entry.bp;
                 if (vm.rsp == 0) [[unlikely]] {
                     return ExecutionError::END;
                 }
@@ -1230,13 +1310,18 @@ vm.ip += sizeof(varname)
             }
             kase Op::LD_LOCAL: {
                 FETCH_VALUE(u32, offset);
-                if (vm.lp + offset >= vm.sp) return ExecutionError::LOCAL_SLOT_OUT_OF_BOUNDS;
+                if (vm.lp + offset >= vm.bp) return ExecutionError::LOCAL_SLOT_OUT_OF_BOUNDS;
                 PUSH(vm.stack[vm.lp + offset]);
             }
             kase Op::LD_ARG: {
                 FETCH_VALUE(u32, offset);
                 if (vm.fp + offset >= vm.lp) return ExecutionError::ARG_SLOT_OUT_OF_BOUNDS;
                 PUSH(vm.stack[vm.fp + offset]);
+            }
+            kase Op::LD_CLOSURE: {
+                if (vm.cc == nullptr) return ExecutionError::NOT_IN_CLOSURE;
+                FETCH_VALUE(u32, offset);
+                PUSH_PTR(Belem(vm.cc, BOX((aint)offset + 1)));
             }
             kase Op::ST_GLOBAL: {
                 PEEK(x);
@@ -1246,7 +1331,7 @@ vm.ip += sizeof(varname)
             kase Op::ST_LOCAL: {
                 PEEK(x);
                 FETCH_VALUE(u32, offset);
-                if (vm.lp + offset >= vm.sp) return ExecutionError::LOCAL_SLOT_OUT_OF_BOUNDS;
+                if (vm.lp + offset >= vm.bp) return ExecutionError::LOCAL_SLOT_OUT_OF_BOUNDS;
                 vm.stack[vm.lp + offset] = x;
             }
             kase Op::ST_ARG: {
@@ -1255,13 +1340,21 @@ vm.ip += sizeof(varname)
                 if (vm.fp + offset >= vm.lp) return ExecutionError::ARG_SLOT_OUT_OF_BOUNDS;
                 vm.stack[vm.fp + offset] = x;
             }
+            kase Op::ST_CLOSURE: {
+                if (vm.cc == nullptr) return ExecutionError::NOT_IN_CLOSURE;
+                POP(x);
+                FETCH_VALUE(u32, offset);
+                PUSH_PTR(Bsta(vm.cc, BOX((aint)offset + 1), x.ptr));
+            }
             kase Op::CALL: {
                 FETCH_VALUE(u32, offset);
                 FETCH_VALUE(u32, num_args);
+                if (vm.rsp >= vm.rstack_top) return ExecutionError::STACK_OVERFLOW;
                 auto &entry = vm.rstack[vm.rsp++];
                 entry.ip = vm.ip;
                 entry.fp = vm.fp;
                 entry.lp = vm.lp;
+                entry.bp = vm.bp;
                 vm.ip = offset;
             }
             kase Op::BUILTIN_READ: {
@@ -1277,13 +1370,14 @@ vm.ip += sizeof(varname)
                 PUSH_NUM_ASSUME_BOXED(Llength(x));
             }
             kase Op::BUILTIN_ARRAY: {
-                gc_update(vm);
                 FETCH_VALUE(u32, num_args);
-                if (vm.sp - vm.lp < num_args) {
+                if (vm.sp - vm.bp < num_args) {
                     return ExecutionError::TOO_MANY_ARGUMENTS;
                 }
 
-                PUSH_PTR(Barray((aint *)vm.stack.get() + (vm.sp - num_args - 1), BOX(num_args)));
+                gc_update(vm);
+                vm.sp -= num_args;
+                PUSH_PTR(Barray((aint *)vm.stack.get() + vm.sp, BOX(num_args)));
             }
             kase Op::BUILTIN_STRING: {
                 gc_update(vm);
@@ -1291,29 +1385,93 @@ vm.ip += sizeof(varname)
                 PUSH_PTR(Lstring(&x.number));
             }
             kase Op::SEXP: {
-                gc_update(vm);
                 FETCH_VALUE(char *, tag);
                 FETCH_VALUE(u32, num_args);
-                if (vm.sp - vm.lp < num_args) {
+                if (vm.sp - vm.bp < num_args) {
                     return ExecutionError::TOO_MANY_ARGUMENTS;
                 }
                 aint tag_hash = LtagHash(tag);
                 vm.stack[vm.sp].number = tag_hash;
 
+                gc_update(vm);
                 vm.sp -= num_args;
-                PUSH_PTR(Bsexp((aint *)vm.stack.get() + (vm.sp - 1), BOX(num_args + 1)));
+                PUSH_PTR(Bsexp((aint *)vm.stack.get() + vm.sp, BOX(num_args + 1)));
             }
             kase Op::TAG: {
                 FETCH_VALUE(char *, tag);
                 FETCH_VALUE(u32, num_args);
                 aint tag_hash = LtagHash(tag);
-                POP_PTR(x);
-                PUSH_NUM_ASSUME_BOXED(Btag(x, tag_hash, BOX(num_args)));
+                POP(x);
+                PUSH_NUM_ASSUME_BOXED(Btag(x.ptr, tag_hash, BOX(num_args)));
             }
             kase Op::FAIL: {
                 FETCH_VALUE(u32, line);
                 FETCH_VALUE(u32, column);
-                Bmatch_failure(vm.stack.get(), "TODO: figure out file name", line, column);
+                Bmatch_failure(vm.stack.get(), vm.filename.c_str(), line, column);
+            }
+            kase Op::CLOSURE: {
+                FETCH_VALUE(u32, num_args);
+                if (vm.sp - vm.bp < num_args) {
+                    return ExecutionError::TOO_MANY_ARGUMENTS;
+                }
+
+                gc_update(vm);
+                vm.sp -= num_args + 1;
+                PUSH_PTR(Bclosure((aint *)vm.stack.get() + vm.sp, BOX(num_args)));
+            }
+            kase Op::POP_CC: {
+                POP2(cc, ret);
+                vm.cc = cc.ptr;
+                PUSH(ret);
+            }
+            kase Op::CALLC: {
+                FETCH_VALUE(u32, num_args);
+                if (vm.sp - vm.bp < num_args + 1) {
+                    return ExecutionError::TOO_MANY_ARGUMENTS;
+                }
+                std::swap(vm.stack[vm.sp - num_args - 1].ptr, vm.cc);
+                // all pointers we create are safe to dereference
+                u32 offset = *(u32 *)vm.cc;
+                if (vm.rsp >= vm.rstack_top) return ExecutionError::STACK_OVERFLOW;
+                auto &entry = vm.rstack[vm.rsp++];
+                entry.ip = vm.ip;
+                entry.fp = vm.fp;
+                entry.lp = vm.lp;
+                entry.bp = vm.bp;
+                vm.ip = offset;
+            }
+            kase Op::PATT_FUN: {
+                POP(x);
+                PUSH_NUM_ASSUME_BOXED(Bclosure_tag_patt(x.ptr));
+            }
+            kase Op::PATT_SEXP: {
+                POP(x);
+                PUSH_NUM_ASSUME_BOXED(Bsexp_tag_patt(x.ptr));
+            }
+            kase Op::PATT_STRING: {
+                POP(x);
+                PUSH_NUM_ASSUME_BOXED(Bstring_tag_patt(x.ptr));
+            }
+            kase Op::PATT_ARRAY: {
+                POP(x);
+                PUSH_NUM_ASSUME_BOXED(Barray_tag_patt(x.ptr));
+            }
+            kase Op::PATT_REF: {
+                POP(x);
+                PUSH_NUM_ASSUME_BOXED(Bboxed_patt(x.ptr));
+            }
+            kase Op::PATT_VAL: {
+                POP(x);
+                PUSH_NUM_ASSUME_BOXED(Bunboxed_patt(x.ptr));
+            }
+            kase Op::PATT_STR: {
+                POP2(x, y);
+                PUSH_NUM_ASSUME_BOXED(Bstring_patt(x.ptr, y.ptr));
+            }
+            kase Op::PATT_ARR: {
+                POP(x);
+                FETCH_VALUE(u32, n);
+                PUSH_NUM_ASSUME_BOXED(Barray_patt(x.ptr, BOX((aint)n)));
             }
             otherwise:
                 throw std::runtime_error("Opcode not supported");
@@ -1369,8 +1527,9 @@ i32 app_execute(const char *bytecode_filename, bool trace = false) {
         el::dump_bytecode(stdout, bc);
     }
     auto vm = il::build_vm(il::VmConfig{
-        .stack_size = 16 * 1024,
-        .rstack_size = 1024,
+        .filename = std::string(bytecode_filename),
+        .stack_size = 16 * 4024,
+        .rstack_size = 4096,
     }, bc);
     if (std::holds_alternative<std::vector<std::string>>(vm)) {
         for (auto &err : std::get<std::vector<std::string>>(vm)) {
@@ -1385,6 +1544,7 @@ i32 app_execute(const char *bytecode_filename, bool trace = false) {
         il::Value { .number = BOX(0), },
     }, trace)) {
         case il::ExecutionError::END:
+            __shutdown();
             return 0;
         kase il::ExecutionError::NAME_NOT_FOUND:
             std::printf("Name not found\n");
@@ -1402,7 +1562,16 @@ i32 app_execute(const char *bytecode_filename, bool trace = false) {
             std::printf("Arithmetic error\n");
         kase il::ExecutionError::ARG_SLOT_OUT_OF_BOUNDS:
             std::printf("Argument slot out of bounds\n");
+        kase il::ExecutionError::POINTER_EXPECTED:
+            std::printf("Pointer expected\n");
+        kase il::ExecutionError::TOO_MANY_ARGUMENTS:
+            std::printf("Too many arguments for a function\n");
+        kase il::ExecutionError::STACK_INCONSISTENT:
+            std::printf("Inconsistent stack usage\n");
+        case il::ExecutionError::NOT_IN_CLOSURE:
+            std::printf("Attempt to access closure variables outside closure\n");
     }
+    __shutdown();
     return 1;
 }
 
@@ -1412,6 +1581,58 @@ i32 app_decompile(const char *bytecode_filename) {
     return 0;
 }
 
+void fuzzing_entrypoint() {
+    __init();
+    u32 bytecode_size = 0;
+    if (fread(&bytecode_size, sizeof(bytecode_size), 1, stdin) != 1) {
+        std::fprintf(stderr, "Failed to read bytecode size from stdin\n");
+        return;
+    }
+
+    std::vector<u8> bytecode(bytecode_size);
+    
+    if (size_t bytes_read = fread(bytecode.data(), 1, bytecode_size, stdin); bytes_read != bytecode_size) {
+        std::fprintf(stderr, "Failed to read complete bytecode: got %zu bytes, expected %u\n", 
+                    bytes_read, bytecode_size);
+        return;
+    }
+
+    try {
+        el::Bytecode bc = el::bytecode_from_bytes(bytecode.data(), bytecode.size());
+        
+        if (auto errors = el::validate_bytecode_stage0(bc); !errors.empty()) {
+            for (const auto& err : errors) {
+                std::fprintf(stderr, "Bytecode validation error: %s\n", err.c_str());
+            }
+            return;
+        }
+
+        il::VmConfig config{
+            .filename = "[fuzzing]",
+            .stack_size = 16 * 1024 * 1024,
+            .rstack_size = 1024 * 1024,
+        };
+
+        auto vm_result = il::build_vm(config, bc);
+        if (std::holds_alternative<std::vector<std::string>>(vm_result)) {
+            for (const auto& err : std::get<std::vector<std::string>>(vm_result)) {
+                std::fprintf(stderr, "VM creation error: %s\n", err.c_str());
+            }
+            return;
+        }
+
+        auto& vm = std::get<il::Vm>(vm_result);
+        
+        if (auto error = il::vm_run(vm, "main", {}, true); error != il::ExecutionError::END) {
+            std::fprintf(stderr, "VM execution failed with error code %d\n", static_cast<int>(error));
+            std::exit(1);
+        }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "Error: %s\n", e.what());
+        std::exit(1);
+    }
+}
+
 i32 main(i32 argc, char *argv[]) try {
     if (argc < 2) {
         std::printf("Usage: %s [subcommand] <bytecode.bc>\n", argv[0]);
@@ -1419,6 +1640,10 @@ i32 main(i32 argc, char *argv[]) try {
     }
 
     if (argc == 2) {
+        if (argv[1] == std::string("fuzz")) {
+            fuzzing_entrypoint();
+            return 0;
+        }
         return app_execute(argv[1]);
     } else if (argc == 3) {
         if (std::string("execute").starts_with(argv[1])) {
