@@ -14,9 +14,9 @@ class TestGroup:
 groups = [
     TestGroup(root=Path("tests"), kind="plain"),
     TestGroup(root=Path("Lama/regression"), kind="cram"),
-    # TestGroup(root=Path("Lama/regression_long/expressions"), kind="cram"),
-    # TestGroup(root=Path("Lama/regression_long/deep-expressions"), kind="cram"),
-    # TestGroup(root=Path("Lama/performance"), kind="plain"),
+    TestGroup(root=Path("Lama/regression_long/expressions"), kind="cram"),
+    TestGroup(root=Path("Lama/regression_long/deep-expressions"), kind="cram"),
+    TestGroup(root=Path("Lama/performance"), kind="plain"),
 ]
 
 

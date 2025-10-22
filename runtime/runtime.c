@@ -968,7 +968,7 @@ extern void *Bsta (void *x, aint i, void *v) {
       }
       case CLOSURE_TAG: {
         if (UNBOX(i) == 0) failure("can't write into closure pointer");
-        ((aint *)d->contents)[UNBOX(i) - 1] = (aint)v;
+        ((aint *)d->contents)[UNBOX(i)] = (aint)v;
         break;
       }
       default: {

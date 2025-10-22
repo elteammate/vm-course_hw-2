@@ -6,8 +6,14 @@ cmake --build /home/elt/projects/vm-course/hw-02/cmake-build-debug --target vm_c
 
 # Запустить
 
-```
+```shell
 ./cmake-build-debug/vm_course_02 00-smoke.bc
+```
+
+# Запустить тесты
+
+```shell
+python scripts/test.py
 ```
 
 # Производительность

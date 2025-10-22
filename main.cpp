@@ -994,6 +994,15 @@ namespace il {
             kase el::Op::PATT_FUN: write_op(Op::PATT_FUN);
             kase el::Op::STOP:
                 break;
+            /*
+             * Instructions which are never emitted
+            kase el::Op::STI:
+            kase el::Op::SWAP:
+            kase el::Op::LDA_GLOBAL:
+            kase el::Op::LDA_LOCAL:
+            kase el::Op::LDA_ARG:
+            kase el::Op::LDA_CLOSURE:
+            */
             otherwise:
                 errors.emplace_back(std::format("Unsupported operation {:02x} at {:08x}", (u32)op, scanner.ip));
                 return std::move(errors);
