@@ -1297,7 +1297,7 @@ let run_parser cmd =
         Matcher.Skip.nestedComment "(*" "*)"
        ] s
 
-       method getLIDENT : 'b. (String.t -> 'self -> ('self, 'b, Reason.t) Types.result) -> ('self, 'b, Reason.t) Types.result =
+       method getLIDENT : 'b. (String.t -> 'self -> ('self, 'b, Reason.t) Types_.result) -> ('self, 'b, Reason.t) Types_.result =
          fun k -> lident#getIdent (fun s self -> k (String.map (function '\'' -> '$' | c -> c) s) self)
      end
     )
