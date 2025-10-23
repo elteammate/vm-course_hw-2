@@ -1531,7 +1531,12 @@ vm.ip += sizeof(varname)
             vm.sp++;
         }
         vm.bp = vm.sp;
-        return vm_continue(trace);
+        __init();
+        push_extra_root(&vm.cc);
+        auto result = vm_continue(trace);
+        clear_extra_roots();
+        __shutdown();
+        return result;
     }
 }
 
@@ -1556,12 +1561,10 @@ i32 app_execute(const char *bytecode_filename, bool trace = false) {
 
     vm = std::move(std::get<il::Vm>(maybe_vm));
 
-    __init();
     auto result = il::vm_run("main", {
         il::Value { .number = BOX(0), },
         il::Value { .number = BOX(0), },
     }, trace);
-    __shutdown();
 
     if (vm.stack[0].number != il::CANARY) {
         std::printf("Stack canary has been overwritten");
