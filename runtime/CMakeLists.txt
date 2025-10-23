@@ -9,6 +9,7 @@ set(RUNTIME_SOURCES
         gc.c
         runtime.c
         printf.S
+        vm.h
 )
 
 set_source_files_properties(printf.S PROPERTIES COMPILE_FLAGS "-Wa,--noexecstack -x assembler-with-cpp -g")

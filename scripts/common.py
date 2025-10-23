@@ -137,16 +137,11 @@ def ensure_compiled():
         "vm_course_02",
     ]).check_returncode()
     subprocess.run([
-        "make",
-        "-C",
-        "runtime",
-    ]).check_returncode()
-    subprocess.run([
         "gcc",
         "Lama/byterun/byterun.c",
-        "runtime/runtime.a",
+        "Lama/runtime/runtime.a",
         "-I",
-        "runtime",
+        "Lama/runtime",
         "-o",
         "byterun.out",
     ]).check_returncode()

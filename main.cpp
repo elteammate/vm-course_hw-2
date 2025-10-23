@@ -689,6 +689,16 @@ namespace il {
     };
 
     struct Vm {
+        u32 ip; // instruction pointer
+        Value *sp; // stack pointer
+        u32 rsp; // return stack pointer
+        Value *fp; // frame pointer (arguments)
+        Value *lp; // local variables pointer (locals)
+        Value *bp; // base pointer (temporaries)
+        void *cc; // current closure register
+        Value *stack_top;
+        u32 rstack_size;
+        u32 globals_size;
         std::unique_ptr<u8 []> code;
         std::unique_ptr<Value []> stack;
         std::unique_ptr<ReturnStackEntry []> rstack;
@@ -696,19 +706,15 @@ namespace il {
         std::unordered_map<std::string, u32> global_functions;
         std::vector<std::pair<u32, u32>> line_mapping;
         std::string filename;
-        u32 globals_size;
-        u32 ip; // instruction pointer
-        u32 sp; // stack pointer
-        u32 rsp; // return stack pointer
-        u32 fp; // frame pointer (arguments)
-        u32 lp; // local variables pointer (locals)
-        u32 bp; // base pointer (temporaries)
-        u32 stack_top;
-        u32 rstack_top;
-        void *cc; // current closure register
     };
+}
 
-    std::variant<Vm, std::vector<std::string>> build_vm(VmConfig cfg, el::Bytecode bc) {
+il::Vm vm;
+
+namespace il {
+    constexpr auint CANARY = 0xAAAA'AAAA;
+
+    std::variant<Vm, std::vector<std::string>> build_vm(const VmConfig& cfg, el::Bytecode bc) {
         std::vector<std::string> errors;
 
         std::vector<u8> code;
@@ -824,7 +830,7 @@ namespace il {
             kase el::Op::ST_GLOBAL: {
                 write_op(Op::ST_GLOBAL);
                 auto offset = (u32)scanner.arg();
-                WRITE_VALUE(offset);
+                WRITE_VALUE(offset + 1);
             }
             kase el::Op::ST_LOCAL: {
                 write_op(Op::ST_LOCAL);
@@ -847,7 +853,7 @@ namespace il {
                 if (offset >= bc.globals_size) {
                     errors.emplace_back(std::format("Global offset {} is out of bounds", offset));
                 }
-                WRITE_VALUE(offset);
+                WRITE_VALUE(offset + 1);
             }
             kase el::Op::LD_LOCAL: {
                 write_op(Op::LD_LOCAL);
@@ -1069,75 +1075,73 @@ namespace il {
 
         auto pinned_code = pin_array(std::move(code));
 
-        auto full_stack_size = bc.globals_size + cfg.stack_size;
+        auto global_allocated = bc.globals_size + 1;
+        auto full_stack_size = global_allocated + cfg.stack_size;
         auto pinned_stack = std::unique_ptr<Value []>(new Value[full_stack_size]);
         auto pinned_rstack = std::unique_ptr<ReturnStackEntry []>(new ReturnStackEntry[cfg.rstack_size]);
 
-        std::fill_n(pinned_stack.get(), bc.globals_size, Value{.number = BOX(0)});
+        std::fill_n(pinned_stack.get(), global_allocated, Value{.number = BOX(0)});
+        pinned_stack[0].number = CANARY; // canary
 
+        auto sp = pinned_stack.get() + global_allocated;
         return Vm{
+            .ip = 0,
+            .sp = sp,
+            .rsp = 0,
+            .fp = sp,
+            .lp = sp,
+            .bp = sp,
+            .cc = nullptr,
+            .stack_top = pinned_stack.get() + full_stack_size,
+            .rstack_size = (u32)cfg.rstack_size,
+            .globals_size = (u32)global_allocated,
             .code = std::move(pinned_code),
             .stack = std::move(pinned_stack),
             .rstack = std::move(pinned_rstack),
             .consts = std::move(pinned_consts),
             .global_functions = std::move(global_functions),
             .line_mapping = std::move(line_mapping),
-            .filename = std::move(cfg.filename),
-            .globals_size = (u32)bc.globals_size,
-            .ip = 0,
-            .sp = (u32)bc.globals_size,
-            .rsp = 0,
-            .fp = (u32)bc.globals_size,
-            .lp = (u32)bc.globals_size,
-            .bp = (u32)bc.globals_size,
-            .stack_top = (u32)full_stack_size,
-            .rstack_top = (u32)cfg.rstack_size,
-            .cc = nullptr,
+            .filename = cfg.filename,
         };
     }
 
-    void dump_stacks(const Vm &vm) {
+    void dump_stacks() {
         std::printf("====================\n");
-        for (int i = 0; i < vm.rsp; i++) {
-            std::printf("%3d rp=%08x fp=%08x lp=%08x\n", i, vm.rstack[i].ip, vm.rstack[i].fp, vm.rstack[i].lp);
+        for (usize i = 0; i < vm.rsp; i++) {
+            std::printf("%3zu rp=%08x fp=%08x lp=%08x\n", i, vm.rstack[i].ip, vm.rstack[i].fp, vm.rstack[i].lp);
         }
         std::printf("====================\n");
-        for (int i = 0; i < vm.sp; i++) {
+        for (usize i = 0; i < (usize)(vm.sp - vm.stack.get()); i++) {
             if (i == vm.globals_size && i > 0) {
                 std::printf("^^^ GLOBALS ^^^\n");
             }
             if (UNBOXED(vm.stack[i].number)) {
-                std::printf("%3d %016lx %ld", i, vm.stack[i].number, UNBOX(vm.stack[i].number));
+                std::printf("%3zu %016lx %ld", i, vm.stack[i].number, UNBOX(vm.stack[i].number));
             } else {
-                std::printf("%3d %016lx %p", i, vm.stack[i].number, vm.stack[i].ptr);
+                std::printf("%3zu %016lx %p", i, vm.stack[i].number, vm.stack[i].ptr);
             }
-            if (i == vm.fp) std::printf(" <fp");
-            if (i == vm.lp) std::printf(" <lp");
-            if (i == vm.bp) std::printf(" <bp");
+            if (vm.stack.get() + i == vm.fp) std::printf(" <fp");
+            if (vm.stack.get() + i == vm.lp) std::printf(" <lp");
+            if (vm.stack.get() + i == vm.bp) std::printf(" <bp");
             std::printf("\n");
         }
     }
 
-    void gc_update(const Vm &vm) {
-        __gc_stack_top = (usize)vm.stack.get() - sizeof(void *);
-        __gc_stack_bottom = (usize)(vm.stack.get() + vm.sp);
-    }
-
-    ExecutionError vm_continue(Vm &vm, bool trace = false) {
+    ExecutionError vm_continue(bool trace = false) {
 #define ESCAPE(varname) CONCAT(varname, _VAL)
 
 #define POP(varname) \
 if (vm.sp <= vm.bp) return ExecutionError::STACK_UNDERFLOW; \
-auto varname = vm.stack[--vm.sp];
+auto varname = *--vm.sp;
 
 #define PEEK(varname) \
 if (vm.sp <= vm.bp) return ExecutionError::STACK_UNDERFLOW; \
-auto varname = vm.stack[vm.sp - 1];
+auto varname = *(vm.sp - 1);
 
 #define POP2(varname, varname2) \
 if (--vm.sp <= vm.bp) return ExecutionError::STACK_UNDERFLOW; \
-auto varname2 = vm.stack[vm.sp]; \
-auto varname = vm.stack[--vm.sp]
+auto varname2 = *vm.sp; \
+auto varname = *--vm.sp;
 
 #define POP_NUM(varname) \
 POP(ESCAPE(varname)); \
@@ -1159,7 +1163,7 @@ void *varname = ESCAPE(varname).ptr
 #define PUSH(expr) { \
 if (vm.sp >= vm.stack_top) return ExecutionError::STACK_OVERFLOW; \
 auto __res = (expr); \
-vm.stack[vm.sp++] = __res; \
+*vm.sp++ = __res; \
 }
 
 #define PUSH_PTR(expr) PUSH(Value { .ptr = (expr) })
@@ -1174,7 +1178,7 @@ vm.ip += sizeof(varname)
 
         while (true) {
             if (trace) {
-                dump_stacks(vm);
+                dump_stacks();
                 dump_instruction(vm.code.get(), vm.ip);
             }
             switch (FETCH_OP()) {
@@ -1243,7 +1247,6 @@ vm.ip += sizeof(varname)
             }
             kase Op::STRING: {
                 FETCH_VALUE(aint, s);
-                gc_update(vm);
                 auto x = Bstring(&s);
                 PUSH_PTR(x);
             }
@@ -1274,7 +1277,8 @@ vm.ip += sizeof(varname)
                 vm.fp = vm.sp - args;
                 vm.lp = vm.sp;
                 for (u32 i = 0; i < locals; ++i) {
-                    vm.stack[vm.sp++].number = BOX(0);
+                    vm.sp->number = BOX(0);
+                    vm.sp++;
                 }
                 vm.bp = vm.sp;
             }
@@ -1286,9 +1290,9 @@ vm.ip += sizeof(varname)
                 auto &entry = vm.rstack[--vm.rsp];
                 vm.sp = vm.fp;
                 vm.ip = entry.ip;
-                vm.fp = entry.fp;
-                vm.lp = entry.lp;
-                vm.bp = entry.bp;
+                vm.fp = vm.stack.get() + entry.fp;
+                vm.lp = vm.stack.get() + entry.lp;
+                vm.bp = vm.stack.get() + entry.bp;
                 if (vm.rsp == 0) [[unlikely]] {
                     return ExecutionError::END;
                 }
@@ -1320,12 +1324,12 @@ vm.ip += sizeof(varname)
             kase Op::LD_LOCAL: {
                 FETCH_VALUE(u32, offset);
                 if (vm.lp + offset >= vm.bp) return ExecutionError::LOCAL_SLOT_OUT_OF_BOUNDS;
-                PUSH(vm.stack[vm.lp + offset]);
+                PUSH(vm.lp[offset]);
             }
             kase Op::LD_ARG: {
                 FETCH_VALUE(u32, offset);
                 if (vm.fp + offset >= vm.lp) return ExecutionError::ARG_SLOT_OUT_OF_BOUNDS;
-                PUSH(vm.stack[vm.fp + offset]);
+                PUSH(vm.fp[offset]);
             }
             kase Op::LD_CLOSURE: {
                 if (vm.cc == nullptr) return ExecutionError::NOT_IN_CLOSURE;
@@ -1341,13 +1345,13 @@ vm.ip += sizeof(varname)
                 PEEK(x);
                 FETCH_VALUE(u32, offset);
                 if (vm.lp + offset >= vm.bp) return ExecutionError::LOCAL_SLOT_OUT_OF_BOUNDS;
-                vm.stack[vm.lp + offset] = x;
+                vm.lp[offset] = x;
             }
             kase Op::ST_ARG: {
                 PEEK(x);
                 FETCH_VALUE(u32, offset);
                 if (vm.fp + offset >= vm.lp) return ExecutionError::ARG_SLOT_OUT_OF_BOUNDS;
-                vm.stack[vm.fp + offset] = x;
+                vm.fp[offset] = x;
             }
             kase Op::ST_CLOSURE: {
                 if (vm.cc == nullptr) return ExecutionError::NOT_IN_CLOSURE;
@@ -1358,12 +1362,12 @@ vm.ip += sizeof(varname)
             kase Op::CALL: {
                 FETCH_VALUE(u32, offset);
                 FETCH_VALUE(u32, num_args);
-                if (vm.rsp >= vm.rstack_top) return ExecutionError::STACK_OVERFLOW;
+                if (vm.rsp >= vm.rstack_size) return ExecutionError::STACK_OVERFLOW;
                 auto &entry = vm.rstack[vm.rsp++];
                 entry.ip = vm.ip;
-                entry.fp = vm.fp;
-                entry.lp = vm.lp;
-                entry.bp = vm.bp;
+                entry.fp = (u32)(vm.fp - vm.stack.get());
+                entry.lp = (u32)(vm.lp - vm.stack.get());
+                entry.bp = (u32)(vm.bp - vm.stack.get());
                 vm.ip = offset;
             }
             kase Op::BUILTIN_READ: {
@@ -1384,12 +1388,10 @@ vm.ip += sizeof(varname)
                     return ExecutionError::TOO_MANY_ARGUMENTS;
                 }
 
-                gc_update(vm);
                 vm.sp -= num_args;
-                PUSH_PTR(Barray((aint *)vm.stack.get() + vm.sp, BOX(num_args)));
+                PUSH_PTR(Barray(&vm.sp->number, BOX(num_args)));
             }
             kase Op::BUILTIN_STRING: {
-                gc_update(vm);
                 POP(x);
                 PUSH_PTR(Lstring(&x.number));
             }
@@ -1400,11 +1402,10 @@ vm.ip += sizeof(varname)
                     return ExecutionError::TOO_MANY_ARGUMENTS;
                 }
                 aint tag_hash = LtagHash(tag);
-                vm.stack[vm.sp].number = tag_hash;
+                vm.sp->number = tag_hash;
 
-                gc_update(vm);
                 vm.sp -= num_args;
-                PUSH_PTR(Bsexp((aint *)vm.stack.get() + vm.sp, BOX(num_args + 1)));
+                PUSH_PTR(Bsexp(&vm.sp->number, BOX(num_args + 1)));
             }
             kase Op::TAG: {
                 FETCH_VALUE(char *, tag);
@@ -1424,9 +1425,8 @@ vm.ip += sizeof(varname)
                     return ExecutionError::TOO_MANY_ARGUMENTS;
                 }
 
-                gc_update(vm);
                 vm.sp -= num_args + 1;
-                PUSH_PTR(Bclosure((aint *)vm.stack.get() + vm.sp, BOX(num_args)));
+                PUSH_PTR(Bclosure(&vm.sp->number, BOX(num_args)));
             }
             kase Op::POP_CC: {
                 POP2(cc, ret);
@@ -1438,15 +1438,15 @@ vm.ip += sizeof(varname)
                 if (vm.sp - vm.bp < num_args + 1) {
                     return ExecutionError::TOO_MANY_ARGUMENTS;
                 }
-                std::swap(vm.stack[vm.sp - num_args - 1].ptr, vm.cc);
+                std::swap((vm.sp - num_args - 1)->ptr, vm.cc);
                 // all pointers we create are safe to dereference
                 u32 offset = *(u32 *)vm.cc;
-                if (vm.rsp >= vm.rstack_top) return ExecutionError::STACK_OVERFLOW;
+                if (vm.rsp >= vm.rstack_size) return ExecutionError::STACK_OVERFLOW;
                 auto &entry = vm.rstack[vm.rsp++];
                 entry.ip = vm.ip;
-                entry.fp = vm.fp;
-                entry.lp = vm.lp;
-                entry.bp = vm.bp;
+                entry.fp = (u32)(vm.fp - vm.stack.get());
+                entry.lp = (u32)(vm.lp - vm.stack.get());
+                entry.bp = (u32)(vm.bp - vm.stack.get());
                 vm.ip = offset;
             }
             kase Op::PATT_FUN: {
@@ -1500,7 +1500,7 @@ vm.ip += sizeof(varname)
 #undef FETCH_VALUE
     }
 
-    u32 vm_get_line(Vm &vm) {
+    u32 vm_get_line() {
         auto it = std::lower_bound(vm.line_mapping.begin(), vm.line_mapping.end(),
             vm.ip,
             [](const auto &lhs, const auto &rhs) { return lhs.first < rhs; });
@@ -1510,50 +1510,66 @@ vm.ip += sizeof(varname)
         return 0;
     }
 
-    ExecutionError vm_run(Vm &vm, const std::string &fn_name, const std::vector<Value> &args, bool trace = false) {
+    ExecutionError vm_run(const std::string &fn_name, const std::vector<Value> &args, bool trace = false) {
         if (!vm.global_functions.contains(fn_name)) {
             return ExecutionError::NAME_NOT_FOUND;
         }
         u32 offset = vm.global_functions.at(fn_name);
         vm.ip = offset;
         vm.rsp = 1;
-        vm.sp = vm.globals_size;
-        vm.lp = vm.globals_size;
-        vm.fp = vm.globals_size;
-        vm.rstack[0] = { .ip = 0, .fp = vm.globals_size, .lp = vm.globals_size };
+        vm.sp = vm.stack.get() + vm.globals_size;
+        vm.lp = vm.sp;
+        vm.fp = vm.sp;
+        vm.rstack[0] = {
+            .ip = 0,
+            .fp = vm.globals_size,
+            .lp = vm.globals_size,
+            .bp = vm.globals_size,
+        };
         for (auto arg : args) {
-            vm.stack[vm.sp++].number = arg.number;
+            vm.sp->number = arg.number;
+            vm.sp++;
         }
-        return vm_continue(vm, trace);
+        vm.bp = vm.sp;
+        return vm_continue(trace);
     }
 }
 
 
 i32 app_execute(const char *bytecode_filename, bool trace = false) {
-    __init();
     auto [guard, bc] = el::bytecode_from_file(bytecode_filename);
     if (trace) {
         el::dump_bytecode(stdout, bc);
     }
-    auto vm = il::build_vm(il::VmConfig{
+    auto maybe_vm = il::build_vm(il::VmConfig{
         .filename = std::string(bytecode_filename),
         .stack_size = 16 * 1024 * 1024,
         .rstack_size = 1024 * 1024,
     }, bc);
-    if (std::holds_alternative<std::vector<std::string>>(vm)) {
-        for (auto &err : std::get<std::vector<std::string>>(vm)) {
+    if (std::holds_alternative<std::vector<std::string>>(maybe_vm)) {
+        for (auto &err : std::get<std::vector<std::string>>(maybe_vm)) {
             std::printf("%s\n", err.c_str());
         }
         return 1;
     }
     auto _ = std::move(guard);
 
-    switch (il::vm_run(std::get<0>(vm), "main", {
+    vm = std::move(std::get<il::Vm>(maybe_vm));
+
+    __init();
+    auto result = il::vm_run("main", {
         il::Value { .number = BOX(0), },
         il::Value { .number = BOX(0), },
-    }, trace)) {
+    }, trace);
+    __shutdown();
+
+    if (vm.stack[0].number != il::CANARY) {
+        std::printf("Stack canary has been overwritten");
+        return 1;
+    }
+
+    switch (result) {
         case il::ExecutionError::END:
-            __shutdown();
             return 0;
         kase il::ExecutionError::NAME_NOT_FOUND:
             std::printf("Name not found\n");
@@ -1577,10 +1593,9 @@ i32 app_execute(const char *bytecode_filename, bool trace = false) {
             std::printf("Too many arguments for a function\n");
         kase il::ExecutionError::STACK_INCONSISTENT:
             std::printf("Inconsistent stack usage\n");
-        case il::ExecutionError::NOT_IN_CLOSURE:
+        kase il::ExecutionError::NOT_IN_CLOSURE:
             std::printf("Attempt to access closure variables outside closure\n");
     }
-    __shutdown();
     return 1;
 }
 
@@ -1630,9 +1645,9 @@ void fuzzing_entrypoint() {
             return;
         }
 
-        auto& vm = std::get<il::Vm>(vm_result);
-        
-        if (auto error = il::vm_run(vm, "main", {}, true); error != il::ExecutionError::END) {
+        vm = std::move(std::get<il::Vm>(vm_result));
+
+        if (auto error = il::vm_run("main", {}, true); error != il::ExecutionError::END) {
             std::fprintf(stderr, "VM execution failed with error code %d\n", static_cast<int>(error));
             std::exit(1);
         }

@@ -5,6 +5,7 @@
 // #define FULL_INVARIANT_CHECKS
 
 #include "gc.h"
+#include "vm.h"
 
 #include "runtime_common.h"
 
@@ -26,7 +27,10 @@ size_t cur_id = 0;
 
 static extra_roots_pool extra_roots;
 
-size_t __gc_stack_top = 0, __gc_stack_bottom = 0;
+// size_t __gc_stack_top = 0, __gc_stack_bottom = 0;
+#define __gc_stack_top ((void *)vm.stack)
+#define __gc_stack_bottom ((void *)vm.sp)
+
 #ifdef LAMA_ENV
 #ifdef __linux__
 extern const size_t __start_custom_data, __stop_custom_data;
@@ -583,10 +587,12 @@ extern void gc_test_and_mark_root (size_t **root) {
   mark((void *)*root);
 }
 
+/*
 void __gc_init (void) {
   __gc_stack_bottom = (size_t)__builtin_frame_address(1) + sizeof(size_t);
   __init();
 }
+*/
 
 void __init (void) {
   signal(SIGSEGV, handler);
@@ -615,8 +621,8 @@ extern void __shutdown (void) {
   heap.end          = NULL;
   heap.size         = 0;
   heap.current      = NULL;
-  __gc_stack_top    = 0;
-  __gc_stack_bottom = 0;
+  // __gc_stack_top    = 0;
+  // __gc_stack_bottom = 0;
 }
 
 void clear_extra_roots (void) { extra_roots.current_free = 0; }
